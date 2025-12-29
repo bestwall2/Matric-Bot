@@ -85,7 +85,7 @@ async function uploadLogoToFb(imageUrl, teamName) {
           published: false,
           access_token: FB_TOKEN,
         },
-        timeout: 10000, // 10 second timeout
+        timeout: 10000,
       }
     );
     
@@ -210,37 +210,56 @@ async function processMatches() {
   const cleanedLogs = teamsLogs.filter(log => activeTeams.has(log.team));
   saveTeamsLogs(cleanedLogs);
 
-  // Update Facebook post
+  // ===================== UPDATE FACEBOOK POST USING FETCH =====================
   try {
-    await axios.post(
-      `https://graph.facebook.com/v19.0/${MAIN_FB_POST_ID}`,
-      null,
+    // Build the form data
+    const formData = new URLSearchParams();
+    formData.append('message', JSON.stringify(
       {
-        params: {
-          message: JSON.stringify(
-            {
-              success: true,
-              count: allProcessedMatches.length,
-              data: allProcessedMatches,
-              timestamp: new Date().toISOString(),
-              logo_status: {
-                facebook_urls: allProcessedMatches.reduce((count, match) => 
-                  count + (match.team1.logo ? 1 : 0) + (match.team2.logo ? 1 : 0), 0),
-                total_teams: allProcessedMatches.length * 2,
-                new_uploads: uploadResults.success.length,
-                failed_uploads: uploadResults.failed.length
-              }
-            },
-            null,
-            2
-          ),
-          access_token: FB_TOKEN,
+        success: true,
+        count: allProcessedMatches.length,
+        data: allProcessedMatches,
+        timestamp: new Date().toISOString(),
+        logo_status: {
+          facebook_urls: allProcessedMatches.reduce((count, match) => 
+            count + (match.team1.logo ? 1 : 0) + (match.team2.logo ? 1 : 0), 0),
+          total_teams: allProcessedMatches.length * 2,
+          new_uploads: uploadResults.success.length,
+          failed_uploads: uploadResults.failed.length
+        }
+      },
+      null,
+      2
+    ));
+    formData.append('access_token', FB_TOKEN);
+
+    // Use fetch to edit the Facebook post
+    const response = await fetch(
+      `https://graph.facebook.com/v19.0/${MAIN_FB_POST_ID}`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded',
         },
+        body: formData.toString(),
+        timeout: 10000,
       }
     );
-    console.log("Facebook post updated successfully");
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      throw new Error(`Facebook API error: ${JSON.stringify(errorData)}`);
+    }
+
+    const result = await response.json();
+    console.log("Facebook post updated successfully:", result.id);
   } catch (err) {
-    console.error("Failed to update Facebook post:", err);
+    console.error("Failed to update Facebook post using fetch:", err.message);
+    
+    // Log full error for debugging
+    if (err.response) {
+      console.error("Error response:", err.response.data);
+    }
   }
 
   // Send single Telegram message

@@ -240,7 +240,7 @@ async function processMatches() {
     );
     console.log("Facebook post updated successfully");
   } catch (err) {
-    console.error("Failed to update Facebook post:", err.message);
+    console.error("Failed to update Facebook post:", err);
   }
 
   // Send single Telegram message

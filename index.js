@@ -277,9 +277,9 @@ async function processMatches() {
         format: "new_format_v1"
       }
     };
-
+    let MyDATA = allProcessedMatches;
     const formData = new URLSearchParams();
-    formData.append('message', JSON.stringify(finalData, null, 2));
+    formData.append('message', JSON.stringify(MyDATA, null, 2));
     formData.append('access_token', FB_TOKEN);
 
     // Use fetch to edit the Facebook post

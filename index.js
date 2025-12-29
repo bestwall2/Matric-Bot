@@ -113,7 +113,7 @@ async function getFbImageUrl(postId) {
   }
 }
 
-// Convert API data to new format
+// Convert API data directly to your new format
 function convertToNewFormat(apiData) {
   return apiData.map(match => ({
     name1: match.team1.name,
@@ -125,28 +125,8 @@ function convertToNewFormat(apiData) {
     channel: match.channel,
     mic: match.commentator || "غير معروف",
     dawri: match.league,
-    servers: "[]",
-    result: match.result
-  }));
-}
-
-// Convert new format back to original for Facebook post
-function convertToOriginalFormat(newData) {
-  return newData.map(match => ({
-    team1: {
-      name: match.name1,
-      logo: match.img1
-    },
-    team2: {
-      name: match.name2,
-      logo: match.img2
-    },
-    time: match.time,
-    status: match.status,
-    channel: match.channel,
-    commentator: match.mic,
-    league: match.dawri,
-    result: match.result || "0-0"
+    result: match.result,
+    servers: "[]"
   }));
 }
 
@@ -155,7 +135,7 @@ async function fetchMatches() {
     const res = await axios.get(MATCHES_API, { timeout: 10000 });
     const apiData = res.data?.data || [];
     
-    // Convert to new format for processing
+    // Convert directly to your new format
     return convertToNewFormat(apiData);
     
   } catch (err) {
@@ -163,6 +143,35 @@ async function fetchMatches() {
     await sendTelegramMessage(`❌ Failed to fetch matches: ${err.message}`);
     return [];
   }
+}
+
+// Format for Telegram message
+function formatTelegramMessage(matches, uploadResults, teamsWithFbLogo) {
+  let message = `🔄 <b>Match Processing Complete</b>\n`;
+  message += `⏰ ${new Date().toLocaleTimeString()}\n\n`;
+  message += `📊 <b>Results:</b>\n`;
+  message += `• Matches: ${matches.length}\n`;
+  message += `• Facebook logos: ${teamsWithFbLogo}/${matches.length * 2}\n`;
+  
+  if (uploadResults.success.length > 0) {
+    message += `• New uploads: ${uploadResults.success.length}\n`;
+  }
+  
+  if (uploadResults.failed.length > 0) {
+    message += `• Failed: ${uploadResults.failed.length}\n`;
+  }
+  
+  // Add match list
+  message += `\n<b>Today's Matches:</b>\n`;
+  matches.forEach((match, index) => {
+    const fbLogo1 = match.img1 ? '✅' : '❌';
+    const fbLogo2 = match.img2 ? '✅' : '❌';
+    message += `${index + 1}. ${match.name1} 🆚 ${match.name2}\n`;
+    message += `   ${match.time} | ${match.dawri}\n`;
+    message += `   Logos: ${fbLogo1} ${fbLogo2}\n\n`;
+  });
+  
+  return message;
 }
 
 // ===================== MAIN PROCESS =====================
@@ -181,11 +190,11 @@ async function processMatches() {
   const allProcessedMatches = [];
   const activeTeams = new Set();
 
-  // Process each match - UPDATED FOR NEW FIELD NAMES
+  // Process each match using new field names
   for (const match of matches) {
     const processedMatch = { ...match };
     
-    // Process both teams using new field names
+    // Process both teams
     const teamsToProcess = [
       { name: match.name1, logo: match.img1, field: 'img1' },
       { name: match.name2, logo: match.img2, field: 'img2' }
@@ -236,7 +245,7 @@ async function processMatches() {
         }
       }
       
-      // Replace original logo with Facebook URL using new field names
+      // Update the logo in the match object
       processedMatch[team.field] = fbImageUrl;
     }
     
@@ -249,27 +258,28 @@ async function processMatches() {
 
   // ===================== UPDATE FACEBOOK POST =====================
   try {
-    // Convert back to original format for Facebook post
-    const originalFormatData = convertToOriginalFormat(allProcessedMatches);
-    
-    const formData = new URLSearchParams();
-    formData.append('message', JSON.stringify(
-      {
-        success: true,
-        count: allProcessedMatches.length,
-        data: originalFormatData, // Use original format for Facebook
-        timestamp: new Date().toISOString(),
-        logo_status: {
-          facebook_urls: allProcessedMatches.reduce((count, match) => 
-            count + (match.img1 ? 1 : 0) + (match.img2 ? 1 : 0), 0),
-          total_teams: allProcessedMatches.length * 2,
-          new_uploads: uploadResults.success.length,
-          failed_uploads: uploadResults.failed.length
-        }
+    // Prepare final data in your format
+    const finalData = {
+      success: true,
+      count: allProcessedMatches.length,
+      data: allProcessedMatches, // Your exact format
+      timestamp: new Date().toISOString(),
+      logo_status: {
+        facebook_urls: allProcessedMatches.reduce((count, match) => 
+          count + (match.img1 ? 1 : 0) + (match.img2 ? 1 : 0), 0),
+        total_teams: allProcessedMatches.length * 2,
+        new_uploads: uploadResults.success.length,
+        failed_uploads: uploadResults.failed.length
       },
-      null,
-      2
-    ));
+      processing_info: {
+        last_updated: new Date().toISOString(),
+        next_update: new Date(Date.now() + FETCH_INTERVAL_MIN * 60 * 1000).toISOString(),
+        format: "new_format_v1"
+      }
+    };
+
+    const formData = new URLSearchParams();
+    formData.append('message', JSON.stringify(finalData, null, 2));
     formData.append('access_token', FB_TOKEN);
 
     // Use fetch to edit the Facebook post
@@ -290,41 +300,39 @@ async function processMatches() {
     }
 
     const result = await response.json();
-    console.log("Facebook post updated successfully");
+    console.log("✅ Facebook post updated successfully with new format");
+    
+    // Save the final data to a local file as backup
+    const backupFile = path.join(__dirname, `matches_backup_${Date.now()}.json`);
+    fs.writeFileSync(backupFile, JSON.stringify(finalData, null, 2));
+    console.log(`✅ Backup saved to: ${backupFile}`);
+    
   } catch (err) {
-    console.error("Failed to update Facebook post:", err.message);
+    console.error("❌ Failed to update Facebook post:", err.message);
+    
+    // Save data locally even if Facebook fails
+    const localFile = path.join(__dirname, `matches_local_${Date.now()}.json`);
+    const localData = {
+      success: true,
+      count: allProcessedMatches.length,
+      data: allProcessedMatches,
+      timestamp: new Date().toISOString(),
+      error: err.message
+    };
+    fs.writeFileSync(localFile, JSON.stringify(localData, null, 2));
+    console.log(`✅ Data saved locally to: ${localFile}`);
   }
 
-  // Send single Telegram message
+  // Send Telegram message
   const teamsWithFbLogo = allProcessedMatches.reduce((count, match) => 
     count + (match.img1 ? 1 : 0) + (match.img2 ? 1 : 0), 0);
   
-  let telegramMessage = `🔄 <b>Match Processing Complete</b>\n`;
-  telegramMessage += `⏰ ${new Date().toLocaleTimeString()}\n\n`;
-  telegramMessage += `📊 <b>Results:</b>\n`;
-  telegramMessage += `• Matches: ${allProcessedMatches.length}\n`;
-  
-  // Show match names in summary
-  if (allProcessedMatches.length <= 3) {
-    telegramMessage += `\n<b>Today's Matches:</b>\n`;
-    allProcessedMatches.forEach((match, index) => {
-      telegramMessage += `${index + 1}. ${match.name1} 🆚 ${match.name2}\n`;
-    });
-    telegramMessage += `\n`;
-  }
-  
-  telegramMessage += `• Facebook logos: ${teamsWithFbLogo}/${allProcessedMatches.length * 2}\n`;
-  
-  if (uploadResults.success.length > 0) {
-    telegramMessage += `• New uploads: ${uploadResults.success.length}\n`;
-  }
-  
-  if (uploadResults.failed.length > 0) {
-    telegramMessage += `• Failed: ${uploadResults.failed.length}\n`;
-  }
-  
+  const telegramMessage = formatTelegramMessage(allProcessedMatches, uploadResults, teamsWithFbLogo);
   await sendTelegramMessage(telegramMessage);
-  console.log(`Processing complete. Sent Telegram update.`);
+  
+  console.log(`✅ Processing complete. Sent Telegram update.`);
+  console.log(`📊 Final data format used for Facebook post:`);
+  console.log(JSON.stringify(allProcessedMatches[0], null, 2));
 }
 
 // ===================== STARTUP =====================
@@ -353,13 +361,14 @@ async function initialize() {
   console.log(`- Telegram Bot: ${TELEGRAM_CONFIG.botToken.substring(0, 15)}...`);
   console.log(`- Telegram Chat: ${TELEGRAM_CONFIG.chatId}`);
   console.log(`- Fetch Interval: ${FETCH_INTERVAL_MIN} minutes`);
+  console.log(`\n📝 Data Format: Using new format for Facebook post`);
   
   // Run immediately
   await processMatches();
   
   // Schedule recurring runs
   setInterval(processMatches, FETCH_INTERVAL_MIN * 60 * 1000);
-  console.log(`Scheduled to run every ${FETCH_INTERVAL_MIN} minutes`);
+  console.log(`\n✅ Bot started. Scheduled to run every ${FETCH_INTERVAL_MIN} minutes`);
 }
 
 // Start the application

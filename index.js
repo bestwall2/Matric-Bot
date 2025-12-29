@@ -6,7 +6,7 @@ const { URL } = require("url"); // For URL validation
 // ===================== CONFIG =====================
 const MATCHES_API = "https://matric-api.vercel.app/api/today-matches";
 const MAIN_FB_POST_ID = "100985439354836_841729738620283";
-const FB_TOKEN = "EAFb7enAJEpABQU1a6tskVcb9q2v6wZCh9RU3ZBZAavjoYHObyq462oKiREZBxZBOS88KNh3apkZCB36TTodMOwkDSpJxBdHXViAZBXn0CMBKuYI4rEAk2ZCRGJ9pnQAJgaM31w6rW6m4lLP9OxMZCZBe3jv72nc2URB2xGshv2BheZCcrApMJ1HDC52pzA1UYogZAsGUzZAiY9grZB";
+const FB_TOKEN = "EAAKXMxkBFCIBQSVAYFyTAIQgnukpnQdy5PwiKg5ze4SO3P1sfxM48BnPOZBZAdLHxnCqdnlDaldHXU0AWhFJQ4rAGFHB4uK4yZC8kHr9f6wzHCgGZAGzBDQaAfmAuMZBL715utLfQNRP9D6L5pNcQxOx8905DbT5ZCEzzE9SVyuNkZBmJsOhKvSSfhx5MVCzmHLKboZD";
 const TEAMS_LOGS_FILE = path.join(__dirname, "teams_logs.json");
 const TELEGRAM_CONFIG = {
   botToken: "7971806903:AAHwpdNzkk6ClL3O17JVxZnp5e9uI66L9WE",

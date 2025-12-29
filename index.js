@@ -1,7 +1,12 @@
+const fs = require("fs");
+const path = require("path");
+const axios = require("axios");
+const { URL } = require("url"); // For URL validation
+
 // ===================== CONFIG =====================
 const MATCHES_API = "https://matric-api.vercel.app/api/today-matches";
-const MAIN_FB_POST_ID = "100985439354836_841729738620283";  // <-- Facebook Post ID here
-const FB_TOKEN = "EAFb7enAJEpABQU1a6tskVcb9q2v6wZCh9RU3ZBZAavjoYHObyq462oKiREZBxZBOS88KNh3apkZCB36TTodMOwkDSpJxBdHXViAZBXn0CMBKuYI4rEAk2ZCRGJ9pnQAJgaM31w6rW6m4lLP9OxMZCZBe3jv72nc2URB2xGshv2BheZCcrApMJ1HDC52pzA1UYogZAsGUzZAiY9grZB";  // <-- Facebook Token here
+const MAIN_FB_POST_ID = "100985439354836_841729738620283";
+const FB_TOKEN = "EAFb7enAJEpABQU1a6tskVcb9q2v6wZCh9RU3ZBZAavjoYHObyq462oKiREZBxZBOS88KNh3apkZCB36TTodMOwkDSpJxBdHXViAZBXn0CMBKuYI4rEAk2ZCRGJ9pnQAJgaM31w6rW6m4lLP9OxMZCZBe3jv72nc2URB2xGshv2BheZCcrApMJ1HDC52pzA1UYogZAsGUzZAiY9grZB";
 const TEAMS_LOGS_FILE = path.join(__dirname, "teams_logs.json");
 const TELEGRAM_CONFIG = {
   botToken: "7971806903:AAHwpdNzkk6ClL3O17JVxZnp5e9uI66L9WE",
@@ -10,18 +15,67 @@ const TELEGRAM_CONFIG = {
 const FETCH_INTERVAL_MIN = 60; // minutes
 // ===================================================
 
-// ===================== UPDATED CODE =====================
-
-// Remove spaces, lowercase to normalize URLs for comparison - ENHANCED
-function normalizeUrl(url) {
-  if (!url) return "";
-  // Remove query parameters and fragments, keep only clean URL
-  return url.trim().toLowerCase().split('?')[0].split('#')[0];
+// ===================== HELPERS =====================
+async function sendTelegramMessage(message) {
+  try {
+    await axios.post(
+      `https://api.telegram.org/bot${TELEGRAM_CONFIG.botToken}/sendMessage`,
+      {
+        chat_id: TELEGRAM_CONFIG.chatId,
+        text: message,
+        parse_mode: "HTML",
+      }
+    );
+  } catch (err) {
+    console.error("Telegram error:", err.message);
+  }
 }
 
-// Upload image to Facebook (logo) and return post ID
+function loadTeamsLogs() {
+  if (!fs.existsSync(TEAMS_LOGS_FILE)) return [];
+  try {
+    const raw = fs.readFileSync(TEAMS_LOGS_FILE, "utf8");
+    return JSON.parse(raw);
+  } catch {
+    return [];
+  }
+}
+
+function saveTeamsLogs(logs) {
+  fs.writeFileSync(TEAMS_LOGS_FILE, JSON.stringify(logs, null, 2));
+}
+
+// Validate and normalize URL
+function normalizeUrl(url) {
+  if (!url) return "";
+  try {
+    const urlObj = new URL(url.trim());
+    return urlObj.toString().toLowerCase();
+  } catch {
+    return url.trim().toLowerCase();
+  }
+}
+
+// Validate image URL before uploading
+async function validateImageUrl(url) {
+  try {
+    const response = await axios.head(url, { timeout: 5000 });
+    const contentType = response.headers['content-type'];
+    return contentType && contentType.startsWith('image/');
+  } catch {
+    return false;
+  }
+}
+
+// Upload image to Facebook and return post ID
 async function uploadLogoToFb(imageUrl, teamName) {
   try {
+    // First validate the image URL
+    const isValid = await validateImageUrl(imageUrl);
+    if (!isValid) {
+      throw new Error(`Invalid image URL: ${imageUrl}`);
+    }
+
     const res = await axios.post(
       `https://graph.facebook.com/v19.0/me/photos`,
       null,
@@ -31,44 +85,65 @@ async function uploadLogoToFb(imageUrl, teamName) {
           published: false,
           access_token: FB_TOKEN,
         },
+        timeout: 10000, // 10 second timeout
       }
     );
-    return res.data?.id || null;
+    
+    if (!res.data?.id) {
+      throw new Error("No post ID returned from Facebook");
+    }
+    
+    return res.data.id;
   } catch (err) {
     console.error(`FB upload error for ${teamName}:`, err.message);
-    throw new Error(`Failed to upload logo for ${teamName}: ${err.message}`);
+    throw err;
   }
 }
 
-// Fetch fresh Facebook image URL for a given post ID
+// Fetch fresh Facebook image URL
 async function getFbImageUrl(postId) {
   try {
     const res = await axios.get(
-      `https://graph.facebook.com/v19.0/${postId}?fields=images&access_token=${FB_TOKEN}`
+      `https://graph.facebook.com/v19.0/${postId}?fields=images&access_token=${FB_TOKEN}`,
+      { timeout: 5000 }
     );
-    // Get the first (usually largest) image URL
+    
     if (res.data?.images?.[0]?.source) {
       return res.data.images[0].source;
     }
+    return null;
   } catch (err) {
-    console.error("FB get image error for post", postId, ":", err.message);
+    console.error("FB get image error:", err.message);
+    return null;
   }
-  return null;
 }
 
-// ===================== MAIN LOOP - REVISED =====================
+// Fetch matches from API
+async function fetchMatches() {
+  try {
+    const res = await axios.get(MATCHES_API, { timeout: 10000 });
+    return res.data?.data || [];
+  } catch (err) {
+    console.error("Failed to fetch matches:", err.message);
+    await sendTelegramMessage(`❌ Failed to fetch matches: ${err.message}`);
+    return [];
+  }
+}
+
+// ===================== MAIN PROCESS =====================
 async function processMatches() {
+  console.log(`=== Starting match processing at ${new Date().toISOString()} ===`);
+  
   const teamsLogs = loadTeamsLogs();
   const matches = await fetchMatches();
-
-  // Track results
-  const uploadResults = {
-    success: [],
-    failed: []
-  };
-  const allProcessedMatches = [];
   
-  // To cleanup old entries
+  if (matches.length === 0) {
+    console.log("No matches found, skipping...");
+    return;
+  }
+
+  const uploadResults = { success: [], failed: [] };
+  const allProcessedMatches = [];
   const activeTeams = new Set();
 
   // Process each match
@@ -76,48 +151,39 @@ async function processMatches() {
     const processedMatch = { ...match };
     const teamsToProcess = [processedMatch.team1, processedMatch.team2];
 
-    // Process each team in the match
     for (const team of teamsToProcess) {
       if (!team.name || !team.logo) continue;
 
       const normalizedLogo = normalizeUrl(team.logo);
       activeTeams.add(team.name);
       
-      // Find existing entry for this team
       const existingIndex = teamsLogs.findIndex(t => t.team === team.name);
-      
-      let fbPostId = null;
       let fbImageUrl = null;
       
       if (existingIndex !== -1) {
-        // Team exists - use existing FB post ID
-        fbPostId = teamsLogs[existingIndex].fb_post_id;
-        
-        // Get fresh Facebook URL (every 60 minutes as requested)
+        // Existing team - get fresh Facebook URL
+        const fbPostId = teamsLogs[existingIndex].fb_post_id;
         fbImageUrl = await getFbImageUrl(fbPostId);
         
         if (!fbImageUrl) {
           // Facebook URL failed, try to re-upload
-          console.log(`Facebook URL not available for ${team.name}, re-uploading...`);
+          console.log(`Re-uploading logo for ${team.name}...`);
           try {
-            fbPostId = await uploadLogoToFb(team.logo, team.name);
-            if (fbPostId) {
-              teamsLogs[existingIndex].fb_post_id = fbPostId;
+            const newPostId = await uploadLogoToFb(team.logo, team.name);
+            if (newPostId) {
+              teamsLogs[existingIndex].fb_post_id = newPostId;
               teamsLogs[existingIndex].last_updated = new Date().toISOString();
-              fbImageUrl = await getFbImageUrl(fbPostId);
-              uploadResults.success.push(team.name + " (re-uploaded)");
+              fbImageUrl = await getFbImageUrl(newPostId);
+              uploadResults.success.push(`${team.name} (re-uploaded)`);
             }
           } catch (err) {
-            uploadResults.failed.push({
-              team: team.name,
-              error: err.message
-            });
+            uploadResults.failed.push({ team: team.name, error: err.message });
           }
         }
       } else {
         // New team - upload to Facebook
         try {
-          fbPostId = await uploadLogoToFb(team.logo, team.name);
+          const fbPostId = await uploadLogoToFb(team.logo, team.name);
           if (fbPostId) {
             teamsLogs.push({
               team: team.name,
@@ -129,30 +195,22 @@ async function processMatches() {
             uploadResults.success.push(team.name);
           }
         } catch (err) {
-          uploadResults.failed.push({
-            team: team.name,
-            error: err.message
-          });
+          uploadResults.failed.push({ team: team.name, error: err.message });
         }
       }
       
-      // REPLACE original logo with Facebook URL (or null if failed)
-      team.logo = fbImageUrl; // Direct replacement
-      
-      // Remove original logo property since we don't need it
-      delete team.originalLogo;
+      // Replace original logo with Facebook URL
+      team.logo = fbImageUrl;
     }
     
     allProcessedMatches.push(processedMatch);
   }
 
-  // Cleanup: Remove teams that are no longer in current matches
+  // Cleanup old entries
   const cleanedLogs = teamsLogs.filter(log => activeTeams.has(log.team));
-  
-  // Save cleaned logs (no original URLs stored)
   saveTeamsLogs(cleanedLogs);
 
-  // 1. Edit main FB post with JSON (only Facebook URLs)
+  // Update Facebook post
   try {
     await axios.post(
       `https://graph.facebook.com/v19.0/${MAIN_FB_POST_ID}`,
@@ -166,11 +224,8 @@ async function processMatches() {
               data: allProcessedMatches,
               timestamp: new Date().toISOString(),
               logo_status: {
-                facebook_urls: allProcessedMatches.reduce((count, match) => {
-                  return count + 
-                    (match.team1.logo ? 1 : 0) + 
-                    (match.team2.logo ? 1 : 0);
-                }, 0),
+                facebook_urls: allProcessedMatches.reduce((count, match) => 
+                  count + (match.team1.logo ? 1 : 0) + (match.team2.logo ? 1 : 0), 0),
                 total_teams: allProcessedMatches.length * 2,
                 new_uploads: uploadResults.success.length,
                 failed_uploads: uploadResults.failed.length
@@ -183,52 +238,71 @@ async function processMatches() {
         },
       }
     );
+    console.log("Facebook post updated successfully");
   } catch (err) {
-    console.error("Failed to edit main FB post:", err.message);
+    console.error("Failed to update Facebook post:", err.message);
   }
 
-  // 2. Send SINGLE Telegram message
-  let telegramMessage = `🔄 <b>Matches Processing Complete</b>\n`;
+  // Send single Telegram message
+  const teamsWithFbLogo = allProcessedMatches.reduce((count, match) => 
+    count + (match.team1.logo ? 1 : 0) + (match.team2.logo ? 1 : 0), 0);
+  
+  let telegramMessage = `🔄 <b>Match Processing Complete</b>\n`;
   telegramMessage += `⏰ ${new Date().toLocaleTimeString()}\n\n`;
-  
-  telegramMessage += `📊 <b>Logo Status:</b>\n`;
-  const totalTeams = allProcessedMatches.length * 2;
-  const teamsWithFbLogo = allProcessedMatches.reduce((count, match) => {
-    return count + 
-      (match.team1.logo ? 1 : 0) + 
-      (match.team2.logo ? 1 : 0);
-  }, 0);
-  
-  telegramMessage += `✅ Facebook URLs: ${teamsWithFbLogo}/${totalTeams}\n`;
+  telegramMessage += `📊 <b>Results:</b>\n`;
+  telegramMessage += `• Matches: ${allProcessedMatches.length}\n`;
+  telegramMessage += `• Facebook logos: ${teamsWithFbLogo}/${allProcessedMatches.length * 2}\n`;
   
   if (uploadResults.success.length > 0) {
-    telegramMessage += `📤 New uploads: ${uploadResults.success.length}\n`;
+    telegramMessage += `• New uploads: ${uploadResults.success.length}\n`;
   }
   
   if (uploadResults.failed.length > 0) {
-    telegramMessage += `❌ Failed: ${uploadResults.failed.length}\n`;
+    telegramMessage += `• Failed: ${uploadResults.failed.length}\n`;
   }
   
-  telegramMessage += `\n📋 <b>Matches:</b> ${allProcessedMatches.length}\n`;
-
-  // Optional: Show matches summary (commented to keep message short)
-  
-  telegramMessage += `\n<b>Match List:</b>\n`;
-  allProcessedMatches.slice(0, 3).forEach((m, index) => {
-    telegramMessage += `${index + 1}. ${m.team1.name} vs ${m.team2.name}\n`;
-    telegramMessage += `   ${m.time} | ${m.league}\n`;
-  });
-  
-  if (allProcessedMatches.length > 3) {
-    telegramMessage += `... and ${allProcessedMatches.length - 3} more matches\n`;
-  }
-  
-
   await sendTelegramMessage(telegramMessage);
-
-  console.log(`Processing complete at ${new Date().toISOString()}`);
+  console.log(`Processing complete. Sent Telegram update.`);
 }
 
-// ===================== KEEP ALIVE =====================
-processMatches(); // run immediately
-setInterval(processMatches, FETCH_INTERVAL_MIN * 60 * 1000); // repeat every 60 minutes
+// ===================== STARTUP =====================
+// Verify dependencies are installed
+function checkDependencies() {
+  try {
+    require('axios');
+    console.log("✅ All dependencies are available");
+    return true;
+  } catch (err) {
+    console.error("❌ Missing dependencies. Please run:");
+    console.error("npm install axios");
+    return false;
+  }
+}
+
+// Initialize and start the process
+async function initialize() {
+  if (!checkDependencies()) {
+    process.exit(1);
+  }
+  
+  console.log("Starting match processing bot...");
+  console.log("Configuration:");
+  console.log(`- Facebook Post ID: ${MAIN_FB_POST_ID}`);
+  console.log(`- Facebook Token: ${FB_TOKEN.substring(0, 15)}...`);
+  console.log(`- Telegram Bot: ${TELEGRAM_CONFIG.botToken.substring(0, 15)}...`);
+  console.log(`- Telegram Chat: ${TELEGRAM_CONFIG.chatId}`);
+  console.log(`- Fetch Interval: ${FETCH_INTERVAL_MIN} minutes`);
+  
+  // Run immediately
+  await processMatches();
+  
+  // Schedule recurring runs
+  setInterval(processMatches, FETCH_INTERVAL_MIN * 60 * 1000);
+  console.log(`Scheduled to run every ${FETCH_INTERVAL_MIN} minutes`);
+}
+
+// Start the application
+initialize().catch(err => {
+  console.error("Failed to initialize:", err);
+  process.exit(1);
+});

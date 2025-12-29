@@ -1,0 +1,17 @@
+{
+  "name": "matric-bot",
+  "version": "1.0.0",
+  "description": "Fetch football matches, upload team logos to Facebook, update main post, and send Telegram reports.",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "author": "Ahmed",
+  "license": "MIT",
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "dependencies": {
+    "axios": "^1.6.0"
+  }
+}

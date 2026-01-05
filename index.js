@@ -12,7 +12,7 @@ const TELEGRAM_CONFIG = {
   botToken: "7971806903:AAHwpdNzkk6ClL3O17JVxZnp5e9uI66L9WE",
   chatId: "-1002181683719",
 };
-const FETCH_INTERVAL_MIN = 60;
+const FETCH_INTERVAL_MIN = 240;
 // ===================================================
 
 // ===================== HELPERS =====================
